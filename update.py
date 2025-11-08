@@ -18,6 +18,22 @@ basicConfig(format="[%(asctime)s] [%(levelname)s] - %(message)s",
             handlers=[FileHandler('log.txt'), StreamHandler()],
             level=INFO)
 
+CONFIG_FILE_URL = environ.get('CONFIG_FILE_URL')
+try:
+    if len(CONFIG_FILE_URL) == 0:
+        raise TypeError
+    try:
+        res = rget(CONFIG_FILE_URL)
+        if res.status_code == 200:
+            with open('config.env', 'wb+') as f:
+                f.write(res.content)
+        else:
+            log_error(f"Failed to download config.env {res.status_code}")
+    except Exception as e:
+        log_error(f"CONFIG_FILE_URL: {e}")
+except:
+    pass
+
 load_dotenv('config.env', override=True)
 
 try:
@@ -65,139 +81,23 @@ UPSTREAM_BRANCH = environ.get('UPSTREAM_BRANCH', '')
 if len(UPSTREAM_BRANCH) == 0:
     UPSTREAM_BRANCH = 'hk_kpsmlx'
 
-def update_bot():
-    """Function to update the bot from upstream repository"""
-    try:
-        log_info('Starting update process...')
-        
-        if ospath.exists('.git'):
-            srun(["rm", "-rf", ".git"])
-            
-        update_process = srun([f"git init -q \
-                              && git config --global user.email doc.adhikari@gmail.com \
-                              && git config --global user.name weebzone \
-                              && git add . \
-                              && git commit -sm update -q \
-                              && git remote add origin {UPSTREAM_REPO} \
-                              && git fetch origin -q \
-                              && git reset --hard origin/{UPSTREAM_BRANCH} -q"], shell=True)
-        
-        repo = UPSTREAM_REPO.split('/')
-        UPSTREAM_REPO_FULL = f"https://github.com/{repo[-2]}/{repo[-1]}"
-        
-        if update_process.returncode == 0:
-            log_info('Successfully updated with latest commits!')
-            return True, "Successfully updated with latest commits!"
-        else:
-            log_error('Update failed!')
-            return False, "Update failed! Please check logs for details."
-            
-    except Exception as e:
-        log_error(f'Error during update: {str(e)}')
-        return False, f"Error during update: {str(e)}"
-
-# Auto-update on startup
 if UPSTREAM_REPO is not None:
-    success, message = update_bot()
+    if ospath.exists('.git'):
+        srun(["rm", "-rf", ".git"])
+
+    update = srun([f"git init -q \
+                     && git config --global user.email doc.adhikari@gmail.com \
+                     && git config --global user.name weebzone \
+                     && git add . \
+                     && git commit -sm update -q \
+                     && git remote add origin {UPSTREAM_REPO} \
+                     && git fetch origin -q \
+                     && git reset --hard origin/{UPSTREAM_BRANCH} -q"], shell=True)
+
+    repo = UPSTREAM_REPO.split('/')
+    UPSTREAM_REPO = f"https://github.com/{repo[-2]}/{repo[-1]}"
+    if update.returncode == 0:
+        log_info('Successfully updated with latest commits !!')
+    else:
+        log_error('Something went Wrong ! Retry or Ask Support !')
     log_info(f'UPSTREAM_REPO: {UPSTREAM_REPO} | UPSTREAM_BRANCH: {UPSTREAM_BRANCH}')
-
-# /update command handler function (to be integrated with your bot)
-async def update_command(update, context):
-    """Handle the /update command"""
-    try:
-        # Check if user is authorized to update
-        user_id = update.message.from_user.id
-        # Add your authorization logic here (e.g., check if user is owner/admin)
-        
-        # Send initial message
-        message = await update.message.reply_text("🔄 Updating bot from upstream repository...")
-        
-        # Perform update
-        success, update_message = update_bot()
-        
-        if success:
-            response_text = f"✅ {update_message}\n\nBot will now restart to apply changes."
-            await message.edit_text(response_text)
-            
-            # Restart the bot
-            import sys
-            import os
-            os.execl(sys.executable, sys.executable, *sys.argv)
-        else:
-            response_text = f"❌ {update_message}\n\nPlease check logs for more details."
-            await message.edit_text(response_text)
-            
-    except Exception as e:
-        error_msg = f"Error executing update command: {str(e)}"
-        log_error(error_msg)
-        await update.message.reply_text(f"❌ {error_msg}")
-
-# Alternative /update command with more detailed output
-async def detailed_update_command(update, context):
-    """Handle the /update command with detailed progress"""
-    try:
-        user_id = update.message.from_user.id
-        # Add authorization check here
-        
-        progress_message = await update.message.reply_text(
-            "🔄 Starting update process...\n"
-            "▰▱▱▱▱▱▱▱▱ 10%"
-        )
-        
-        # Step 1: Remove existing git
-        await progress_message.edit_text(
-            "🔄 Removing existing git repository...\n"
-            "▰▰▱▱▱▱▱▱▱ 20%"
-        )
-        
-        if ospath.exists('.git'):
-            srun(["rm", "-rf", ".git"])
-        
-        # Step 2: Initialize git
-        await progress_message.edit_text(
-            "🔄 Initializing git...\n"
-            "▰▰▰▱▱▱▱▱▱ 30%"
-        )
-        
-        # Step 3: Perform the actual update
-        await progress_message.edit_text(
-            "🔄 Fetching latest changes...\n"
-            "▰▰▰▰▰▱▱▱▱ 50%"
-        )
-        
-        success, update_message = update_bot()
-        
-        if success:
-            await progress_message.edit_text(
-                "✅ Successfully updated!\n"
-                "▰▰▰▰▰▰▰▰▰▰ 100%\n\n"
-                "Restarting bot to apply changes..."
-            )
-            
-            # Restart after a short delay
-            import asyncio
-            await asyncio.sleep(2)
-            import sys
-            import os
-            os.execl(sys.executable, sys.executable, *sys.argv)
-        else:
-            await progress_message.edit_text(
-                f"❌ Update failed!\n"
-                f"Error: {update_message}\n\n"
-                "Please check logs for more details."
-            )
-            
-    except Exception as e:
-        log_error(f"Error in detailed update: {str(e)}")
-        await update.message.reply_text(f"❌ Update failed: {str(e)}")
-
-# Function to register the update command with your bot
-def register_update_handlers(application):
-    """Register update command handlers with the bot"""
-    from telegram.ext import CommandHandler
-    
-    # Register the basic update command
-    application.add_handler(CommandHandler("update", update_command))
-    
-    # Optional: Register detailed update command with different name
-    application.add_handler(CommandHandler("update_detailed", detailed_update_command))
