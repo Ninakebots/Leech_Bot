@@ -628,6 +628,10 @@ async def edit_user_settings(client, query):
         edit_mode = len(data) == 4
         return_key = 'leech' if data[2][0] == 'l' else 'mirror'
         await update_user_settings(query, data[2], return_key, edit_mode)
+       METADATA = environ.get('METADATA', '')
+       if len(METADATA) == 0:
+       METADATA = ''
+await DbManger().update_user_data(user_id)
         if not edit_mode: return
         pfunc = partial(set_custom, pre_event=query, key=data[2])
         rfunc = partial(update_user_settings, query, data[2], return_key)
