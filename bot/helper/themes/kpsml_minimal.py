@@ -107,12 +107,14 @@ class KPSMLStyle:
     # ---------------------
 
     # async def restart_notification(): ---> __main__.py
-    RESTART_SUCCESS = '''⌬ <b><ɪ>ʀᴇsᴛᴀʀᴛᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!</ɪ></b>
+    RESTART_SUCCESS = '''
+⌬ <b><ɪ>ʀᴇsᴛᴀʀᴛᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!</ɪ></b>
 ┠ <b>ᴅᴀᴛᴇ:</b> {date}
 ┠ <b>ᴛɪᴍᴇ:</b> {time}
 ┠ <b>ᴛɪᴍᴇᴢᴏɴᴇ:</b> {timz}
 ┖ <b>ᴠᴇʀsɪᴏɴ:</b> {version}
-┖ <b>ʟᴀsᴛ ᴄʜᴀɴɢᴇʟᴏɢ :</b> {commit_details}'''
+┖ <b>ʟᴀsᴛ ᴄʜᴀɴɢᴇʟᴏɢ :</b> {commit_details}
+'''
     RESTARTED = '''⌬ <b><ɪ>ʙᴏᴛ ʀᴇsᴛᴀʀᴛᴇᴅ!</ɪ></b>'''
     # ---------------------
 
