@@ -241,6 +241,70 @@ async def split_file(path, size, file_, dirpath, split_size, listener, start_tim
             LOGGER.error(err)
     return True
 
+
+def extract_media_info_from_filename(filename):
+    """
+    Extract season, episode, and quality from filename using common patterns
+    """
+    season = episode = quality = ""
+    
+    # Common patterns for season and episode
+    patterns = [
+        # S01E01, S01E02, etc.
+        r'[Ss](\d+)[Ee](\d+)',
+        # Season 1 Episode 2, etc.
+        r'[Ss]eason\s*(\d+)\s*[Ee]pisode\s*(\d+)',
+        # 1x01, 1x02, etc.
+        r'(\d+)x(\d+)',
+        # [01x02], etc.
+        r'\[(\d+)x(\d+)\]',
+    ]
+    
+    for pattern in patterns:
+        match = re_search(pattern, filename)
+        if match:
+            season = match.group(1).zfill(2)  # Pad with leading zero
+            episode = match.group(2).zfill(2)  # Pad with leading zero
+            break
+    
+    # Quality patterns
+    quality_patterns = [
+        r'(\d{3,4}[pP])',           # 1080p, 720p, etc.
+        r'([48][kK])',              # 4k, 8k
+        r'([Hh][Dd][Rr]?)',         # HDR
+        r'([Dd][Vd][Rr][Ii][Pp])',  # DVDRip
+        r'([Bb][Ll][Uu][Rr][Aa][Yy])', # BluRay
+        r'([Ww][Ee][Bb])',          # WEB
+    ]
+    
+    for pattern in quality_patterns:
+        match = re_search(pattern, filename)
+        if match:
+            quality = match.group(1).upper()
+            break
+    
+    return season, episode, quality
+
+
+def replace_auto_rename_codes(text, season, episode, quality):
+    """
+    Replace auto-rename codes in text with actual values
+    """
+    replacements = {
+        '{season}': season,
+        '{episode}': episode,
+        '{quality}': quality,
+        '{Season}': season,  # Case variations
+        '{Episode}': episode,
+        '{Quality}': quality,
+    }
+    
+    for code, value in replacements.items():
+        text = text.replace(code, value)
+    
+    return text
+
+
 async def format_filename(file_, user_id, dirpath=None, isMirror=False):
     user_dict = user_data.get(user_id, {})
     ftag, ctag = ('m', 'MIRROR') if isMirror else ('l', 'LEECH')
@@ -250,13 +314,14 @@ async def format_filename(file_, user_id, dirpath=None, isMirror=False):
     lcaption = config_dict['LEECH_FILENAME_CAPTION'] if (val:=user_dict.get('lcaption', '')) == '' else val
  
     prefile_ = file_
-    #file_ = re_sub(r'www\S+', '', file_)
+    
+    # Extract season, episode, and quality from filename
+    season, episode, quality = extract_media_info_from_filename(file_)
     
     # Remove URLs starting with "www"
     file_ = re_sub(r'www\S+', '', file_, flags=IGNORECASE)
 
     # Remove leading/trailing dashes and extra spaces
-    # file_ = re_sub(r'^\s*-\s*', '', file_)
     file_ = re_sub(r'(^\s*-\s*|(\s*-\s*){2,})', '', file_)
         
     if remname:
@@ -278,12 +343,16 @@ async def format_filename(file_, user_id, dirpath=None, isMirror=False):
 
     nfile_ = file_
     if prefix:
+        # Replace auto-rename codes in prefix
+        prefix = replace_auto_rename_codes(prefix, season, episode, quality)
         nfile_ = prefix.replace('\s', ' ') + file_
         prefix = re_sub(r'<.*?>', '', prefix).replace('\s', ' ')
         if not file_.startswith(prefix):
             file_ = f"{prefix}{file_}"
 
     if suffix and not isMirror:
+        # Replace auto-rename codes in suffix
+        suffix = replace_auto_rename_codes(suffix, season, episode, quality)
         suffix = suffix.replace('\s', ' ')
         sufLen = len(suffix)
         fileDict = file_.split('.')
@@ -298,9 +367,14 @@ async def format_filename(file_, user_id, dirpath=None, isMirror=False):
             )
         file_ = _newExtFileName
     elif suffix:
+        # Replace auto-rename codes in suffix
+        suffix = replace_auto_rename_codes(suffix, season, episode, quality)
         suffix = suffix.replace('\s', ' ')
         file_ = f"{ospath.splitext(file_)[0]}{suffix}{ospath.splitext(file_)[1]}" if '.' in file_ else f"{file_}{suffix}"
 
+    # Replace auto-rename codes in filename itself
+    file_ = replace_auto_rename_codes(file_, season, episode, quality)
+    nfile_ = replace_auto_rename_codes(nfile_, season, episode, quality)
 
     cap_mono =  f"<{config_dict['CAP_FONT']}>{nfile_}</{config_dict['CAP_FONT']}>" if config_dict['CAP_FONT'] else nfile_
     if lcaption and dirpath and not isMirror:
@@ -313,14 +387,20 @@ async def format_filename(file_, user_id, dirpath=None, isMirror=False):
         slit[0] = re_sub(r'\{([^}]+)\}', lowerVars, slit[0])
         up_path = ospath.join(dirpath, prefile_)
         dur, qual, lang, subs = await get_media_info(up_path, True)
+        
+        # Use detected quality if available, otherwise use media info quality
+        final_quality = quality if quality else qual
+        
         cap_mono = slit[0].format(
             filename = nfile_,
             size = get_readable_file_size(await aiopath.getsize(up_path)),
             duration = get_readable_time(dur),
-            quality = qual,
+            quality = final_quality,
             languages = lang,
             subtitles = subs,
-            md5_hash = get_md5_hash(up_path)
+            md5_hash = get_md5_hash(up_path),
+            season = season,
+            episode = episode
         )
         if len(slit) > 1:
             for rep in range(1, len(slit)):
