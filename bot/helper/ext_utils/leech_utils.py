@@ -258,30 +258,53 @@ def extract_media_info_from_filename(filename):
         r'(\d+)x(\d+)',
         # [01x02], etc.
         r'\[(\d+)x(\d+)\]',
+        # Standalone episode numbers (for patterns like "Tom Kun 1 480p.mkv")
+        r'\b(\d{1,3})\b',
     ]
     
-    for pattern in patterns:
+    # First try to find season+episode patterns
+    for pattern in patterns[:-1]:  # Exclude the standalone pattern for now
         match = re_search(pattern, filename)
         if match:
             season = match.group(1).zfill(2)  # Pad with leading zero
-            episode = match.group(2).zfill(2)  # Pad with leading zero
+            if match.lastindex >= 2:
+                episode = match.group(2).zfill(2)  # Pad with leading zero
             break
     
-    # Quality patterns
+    # If no episode found, try standalone episode numbers
+    if not episode:
+        standalone_match = re_search(r'\b(\d{1,3})\b', filename)
+        if standalone_match:
+            # Check if this looks like an episode number (not a year, etc.)
+            ep_num = int(standalone_match.group(1))
+            if 1 <= ep_num <= 999:  # Reasonable episode range
+                episode = str(ep_num).zfill(2)
+                season = "01"  # Default to season 1 for standalone episodes
+    
+    # Quality patterns with better priority
+    quality_matches = []
+    
     quality_patterns = [
-        r'(\d{3,4}[pP])',           # 1080p, 720p, etc.
-        r'([48][kK])',              # 4k, 8k
-        r'([Hh][Dd][Rr]?)',         # HDR
-        r'([Dd][Vd][Rr][Ii][Pp])',  # DVDRip
-        r'([Bb][Ll][Uu][Rr][Aa][Yy])', # BluRay
-        r'([Ww][Ee][Bb])',          # WEB
+        (r'(\d{3,4}[pP])', 1),           # 1080p, 720p, 480p (highest priority)
+        (r'([48][kK])', 2),              # 4k, 8k
+        (r'([Hh][Dd][Rr]\+?)', 3),       # HDR, HDR+
+        (r'([Dd][Oo][Ll][Bb][Yy][Vv][Ii][Ss][Ii][Oo][Nn])', 4), # DolbyVision
+        (r'([Dd][Vd][Rr][Ii][Pp])', 5),  # DVDRip
+        (r'([Bb][Ll][Uu][Rr][Aa][Yy])', 6), # BluRay
+        (r'([Ww][Ee][Bb][-\.]?[Dd][Ll])', 7), # WEB-DL
+        (r'([Ww][Ee][Bb][Rr][Ii][Pp])', 8), # WEBRip
+        (r'([Hh][Dd][Tt][Vv])', 9),      # HDTV
     ]
     
-    for pattern in quality_patterns:
+    for pattern, priority in quality_patterns:
         match = re_search(pattern, filename)
         if match:
-            quality = match.group(1).upper()
-            break
+            quality_matches.append((priority, match.group(1).upper()))
+    
+    # Get the highest priority quality match
+    if quality_matches:
+        quality_matches.sort(key=lambda x: x[0])
+        quality = quality_matches[0][1]
     
     return season, episode, quality
 
@@ -289,18 +312,25 @@ def extract_media_info_from_filename(filename):
 def replace_auto_rename_codes(text, season, episode, quality):
     """
     Replace auto-rename codes in text with actual values
+    Only replace if values are found, otherwise remove the codes
     """
     replacements = {
-        '{season}': season,
-        '{episode}': episode,
-        '{quality}': quality,
-        '{Season}': season,  # Case variations
-        '{Episode}': episode,
-        '{Quality}': quality,
+        '{season}': season if season else "",
+        '{episode}': episode if episode else "",
+        '{quality}': quality if quality else "",
+        '{Season}': season if season else "",  # Case variations
+        '{Episode}': episode if episode else "",
+        '{Quality}': quality if quality else "",
     }
     
     for code, value in replacements.items():
         text = text.replace(code, value)
+    
+    # Clean up any double spaces or trailing/leading dashes caused by empty replacements
+    text = re_sub(r'\s+', ' ', text)  # Replace multiple spaces with single space
+    text = re_sub(r'\s*-\s*', ' - ', text)  # Clean dash spacing
+    text = re_sub(r'^\s+|\s+$', '', text)  # Remove leading/trailing spaces
+    text = re_sub(r'^-\s*|-\s*$', '', text)  # Remove leading/trailing dashes
     
     return text
 
@@ -317,6 +347,8 @@ async def format_filename(file_, user_id, dirpath=None, isMirror=False):
     
     # Extract season, episode, and quality from filename
     season, episode, quality = extract_media_info_from_filename(file_)
+    
+    LOGGER.info(f"Auto-rename detection - File: {file_}, Season: {season}, Episode: {episode}, Quality: {quality}")
     
     # Remove URLs starting with "www"
     file_ = re_sub(r'www\S+', '', file_, flags=IGNORECASE)
@@ -339,46 +371,54 @@ async def format_filename(file_, user_id, dirpath=None, isMirror=False):
             elif len(args) == 1:
                 __newFileName = re_sub(args[0], '', __newFileName)
         file_ = __newFileName + ospath.splitext(file_)[1]
-        LOGGER.info(f"New Remname : {file_}")
+        LOGGER.info(f"After remname: {file_}")
 
-    nfile_ = file_
+    # Store original filename for the final name construction
+    original_base_name = ospath.splitext(file_)[0]
+    original_extension = ospath.splitext(file_)[1]
+
+    # Apply prefix with auto-rename codes
+    final_filename = original_base_name
     if prefix:
-        # Replace auto-rename codes in prefix
-        prefix = replace_auto_rename_codes(prefix, season, episode, quality)
-        nfile_ = prefix.replace('\s', ' ') + file_
-        prefix = re_sub(r'<.*?>', '', prefix).replace('\s', ' ')
-        if not file_.startswith(prefix):
-            file_ = f"{prefix}{file_}"
+        # Replace auto-rename codes in prefix only
+        processed_prefix = replace_auto_rename_codes(prefix, season, episode, quality)
+        processed_prefix = processed_prefix.replace('\s', ' ').strip()
+        # Clean the prefix from HTML tags for filename
+        clean_prefix = re_sub(r'<.*?>', '', processed_prefix)
+        final_filename = f"{clean_prefix}{final_filename}"
+        LOGGER.info(f"After prefix: {final_filename}")
 
+    # Apply suffix with auto-rename codes
     if suffix and not isMirror:
-        # Replace auto-rename codes in suffix
-        suffix = replace_auto_rename_codes(suffix, season, episode, quality)
-        suffix = suffix.replace('\s', ' ')
-        sufLen = len(suffix)
-        fileDict = file_.split('.')
-        _extIn = 1 + len(fileDict[-1])
-        _extOutName = '.'.join(
-            fileDict[:-1]).replace('.', ' ').replace('-', ' ')
-        _newExtFileName = f"{_extOutName}{suffix}.{fileDict[-1]}"
-        if len(_extOutName) > (64 - (sufLen + _extIn)):
-            _newExtFileName = (
-                _extOutName[: 64 - (sufLen + _extIn)]
-                + f"{suffix}.{fileDict[-1]}"
-            )
-        file_ = _newExtFileName
-    elif suffix:
-        # Replace auto-rename codes in suffix
-        suffix = replace_auto_rename_codes(suffix, season, episode, quality)
-        suffix = suffix.replace('\s', ' ')
-        file_ = f"{ospath.splitext(file_)[0]}{suffix}{ospath.splitext(file_)[1]}" if '.' in file_ else f"{file_}{suffix}"
-
-    # Replace auto-rename codes in filename itself
-    file_ = replace_auto_rename_codes(file_, season, episode, quality)
-    nfile_ = replace_auto_rename_codes(nfile_, season, episode, quality)
-
-    cap_mono =  f"<{config_dict['CAP_FONT']}>{nfile_}</{config_dict['CAP_FONT']}>" if config_dict['CAP_FONT'] else nfile_
-    if lcaption and dirpath and not isMirror:
+        # Replace auto-rename codes in suffix only
+        processed_suffix = replace_auto_rename_codes(suffix, season, episode, quality)
+        processed_suffix = processed_suffix.replace('\s', ' ').strip()
         
+        # For leech files, insert suffix before extension
+        fileDict = final_filename.split('.')
+        if len(fileDict) > 1:
+            base_part = '.'.join(fileDict[:-1])
+            extension_part = fileDict[-1]
+            final_filename = f"{base_part}{processed_suffix}.{extension_part}"
+        else:
+            final_filename = f"{final_filename}{processed_suffix}"
+        LOGGER.info(f"After suffix: {final_filename}")
+    elif suffix:
+        # For mirror files, just append suffix
+        processed_suffix = replace_auto_rename_codes(suffix, season, episode, quality)
+        processed_suffix = processed_suffix.replace('\s', ' ').strip()
+        final_filename = f"{final_filename}{processed_suffix}"
+        LOGGER.info(f"After suffix: {final_filename}")
+
+    # Add extension back
+    final_filename_with_ext = f"{final_filename}{original_extension}"
+
+    # For caption - use the name with auto-rename codes applied to prefix/suffix but not the main filename
+    nfile_ = final_filename_with_ext
+
+    cap_mono = f"<{config_dict['CAP_FONT']}>{nfile_}</{config_dict['CAP_FONT']}>" if config_dict['CAP_FONT'] else nfile_
+    
+    if lcaption and dirpath and not isMirror:
         def lowerVars(match):
             return f"{{{match.group(1).lower()}}}"
 
@@ -392,15 +432,15 @@ async def format_filename(file_, user_id, dirpath=None, isMirror=False):
         final_quality = quality if quality else qual
         
         cap_mono = slit[0].format(
-            filename = nfile_,
-            size = get_readable_file_size(await aiopath.getsize(up_path)),
-            duration = get_readable_time(dur),
-            quality = final_quality,
-            languages = lang,
-            subtitles = subs,
-            md5_hash = get_md5_hash(up_path),
-            season = season,
-            episode = episode
+            filename=nfile_,
+            size=get_readable_file_size(await aiopath.getsize(up_path)),
+            duration=get_readable_time(dur),
+            quality=final_quality,
+            languages=lang,
+            subtitles=subs,
+            md5_hash=get_md5_hash(up_path),
+            season=season,
+            episode=episode
         )
         if len(slit) > 1:
             for rep in range(1, len(slit)):
@@ -412,7 +452,9 @@ async def format_filename(file_, user_id, dirpath=None, isMirror=False):
                 elif len(args) == 1:
                     cap_mono = cap_mono.replace(args[0], '')
         cap_mono = cap_mono.replace('%%', '|').replace('&%&', '{').replace('$%$', '}')
-    return file_, cap_mono
+    
+    LOGGER.info(f"Final filename: {final_filename_with_ext}")
+    return final_filename_with_ext, cap_mono
 
 
 async def get_ss(up_path, ss_no):
